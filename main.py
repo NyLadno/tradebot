@@ -1,26 +1,6 @@
-# from idlelib import run
-#
-# from fastapi import FastAPI
-# import asyncio
-# app = FastAPI()
-#
-#
-# @app.post('/data_base')
-# def start_db():
-#     setup_database()
-#
-#
-# if __name__ == '__main__':
-#     asyncio.run(start_db())
-#
+import uvicorn
 
-
-s = "2006" * 298
-print(s)
-print(len(s))
-
-while "200" in s or "666" in s:
-    s = s.replace("200", "66", 1)
-    s = s.replace("666", "66", 1)
-
-print(s)
+if __name__ == '__main__':
+    # Запуск сервера uvicorn
+    # Приложение get_news:app будет запущено на порту 8000
+    uvicorn.run("get_news:app", host="0.0.0.0", port=8000, reload=True)
