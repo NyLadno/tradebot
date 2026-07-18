@@ -34,6 +34,22 @@ HEADERS_POST = {
     "Prefer": "return=minimal",
 }
 
+_llm_evaluator = None
+
+def get_llm_evaluator():
+    """
+    Возвращает синглтон экземпляр LLMRiskEvaluator.
+    """
+    global _llm_evaluator
+    if _llm_evaluator is None and os.getenv("ENABLE_LLM_EVALUATION", "true").lower() == "true":
+        try:
+            from llm_evaluator import LLMRiskEvaluator
+            _llm_evaluator = LLMRiskEvaluator()
+        except Exception as e:
+            logger.error(f"[LLM] Не удалось инициализировать LLMRiskEvaluator: {e}")
+            return None
+    return _llm_evaluator
+
 
 async def get_duplicate_urls(urls: List[str], client: httpx.AsyncClient) -> Set[str]:
     """
@@ -168,7 +184,7 @@ async def _save_newsapi_batch_impl(articles: List[Dict[str, Any]], query: str, c
             "raw_article": art,
             "initial_cooldown_until": (now + timedelta(hours=1)).isoformat(),
             "block_until": (now + timedelta(hours=1)).isoformat(),
-            "is_blocked": True,
+            "is_blocked": False,
             "block_source": "AUTO",
             "telegram_sent": False,
         }
@@ -194,6 +210,13 @@ async def _save_newsapi_batch_impl(articles: List[Dict[str, Any]], query: str, c
         logger.info(f"[DB] Все новости ({len(payloads)}) из NewsAPI батча уже существуют в базе. Пропущено.")
         return 0
 
+    # Шаг 3 и 4: Отправка на анализ в LLM (stateless проверка со скрейпингом по ссылке и формулой)
+    evaluator = get_llm_evaluator()
+    if evaluator:
+        logger.info(f"[LLM] Запуск оценки для {len(filtered_payloads)} новых статей из NewsAPI...")
+        filtered_payloads = await evaluator.evaluate_news_batch(filtered_payloads, http_client=client)
+
+    # Шаг 5: Отправка на Supabase
     return await insert_news_batch(filtered_payloads, client)
 
 
@@ -265,6 +288,13 @@ async def _save_google_batch_impl(items: List[Dict[str, Any]], query: str, clien
         logger.info(f"[DB] Все новости ({len(payloads)}) из Google батча уже существуют в базе. Пропущено.")
         return 0
 
+    # Шаг 3 и 4: Отправка на анализ в LLM (stateless проверка со скрейпингом по ссылке и формулой)
+    evaluator = get_llm_evaluator()
+    if evaluator:
+        logger.info(f"[LLM] Запуск оценки для {len(filtered_payloads)} новых статей из Google RSS...")
+        filtered_payloads = await evaluator.evaluate_news_batch(filtered_payloads, http_client=client)
+
+    # Шаг 5: Отправка на Supabase
     return await insert_news_batch(filtered_payloads, client)
 
 
@@ -332,6 +362,13 @@ async def _save_russian_rss_batch_impl(items: List[Dict[str, Any]], client: http
         logger.info(f"[DB] Все новости ({len(payloads)}) из российского RSS батча уже существуют в базе. Пропущено.")
         return 0
 
+    # Шаг 3 и 4: Отправка на анализ в LLM (stateless проверка со скрейпингом по ссылке и формулой)
+    evaluator = get_llm_evaluator()
+    if evaluator:
+        logger.info(f"[LLM] Запуск оценки для {len(filtered_payloads)} новых статей из российского RSS...")
+        filtered_payloads = await evaluator.evaluate_news_batch(filtered_payloads, http_client=client)
+
+    # Шаг 5: Отправка на Supabase
     return await insert_news_batch(filtered_payloads, client)
 
 

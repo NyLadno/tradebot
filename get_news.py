@@ -59,14 +59,14 @@ async def lifespan(app: FastAPI):
     get_http_client()
 
     # Google News: каждые 5 минут с 9:00 до 22:00
-    scheduler.add_job(scheduler_google_fetch, CronTrigger(minute='*/5', hour='9-22'), args=['Татнефть', 'ru', 'RU', 'RU:ru'])
-    scheduler.add_job(scheduler_google_fetch, CronTrigger(minute='*/5', hour='9-22'), args=['Tatneft', 'en-US', 'US', 'US:en'])
-    scheduler.add_job(scheduler_google_fetch, CronTrigger(minute='*/5', hour='9-22'), args=['Tatneft', 'de', 'DE', 'DE:de'])
+    scheduler.add_job(scheduler_google_fetch, CronTrigger(minute='*/5', hour='9-23'), args=['Татнефть', 'ru', 'RU', 'RU:ru'])
+    scheduler.add_job(scheduler_google_fetch, CronTrigger(minute='*/5', hour='9-23'), args=['Tatneft', 'en-US', 'US', 'US:en'])
+    scheduler.add_job(scheduler_google_fetch, CronTrigger(minute='*/5', hour='9-23'), args=['Tatneft', 'de', 'DE', 'DE:de'])
 
     # NewsAPI: 3 раза в час (9:00–22:00)
-    scheduler.add_job(scheduler_newsapi_fetch, CronTrigger(minute='0,24,48', hour='9-22'), args=['Татнефть', 'ru'])
-    scheduler.add_job(scheduler_newsapi_fetch, CronTrigger(minute='0,24,48', hour='9-22'), args=['Tatneft', 'en'])
-    scheduler.add_job(scheduler_newsapi_fetch, CronTrigger(minute='0,24,48', hour='9-22'), args=['Tatneft', 'de'])
+    scheduler.add_job(scheduler_newsapi_fetch, CronTrigger(minute='0,24,48', hour='9-23'), args=['Татнефть', 'ru'])
+    scheduler.add_job(scheduler_newsapi_fetch, CronTrigger(minute='0,24,48', hour='9-23'), args=['Tatneft', 'en'])
+    scheduler.add_job(scheduler_newsapi_fetch, CronTrigger(minute='0,24,48', hour='9-23'), args=['Tatneft', 'de'])
 
     # Российские RSS-источники: каждые 5 минут
     scheduler.add_job(scheduler_russian_rss_fetch, CronTrigger(minute='*/5'))
