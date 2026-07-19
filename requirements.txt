@@ -6,3 +6,5 @@ httpx
 pydantic
 beautifulsoup4
 google-genai
+tenacity
+pytz
