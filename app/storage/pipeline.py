@@ -8,7 +8,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 import httpx
 
-from app.config import settings
+from app.config import RSS_QUERY_KEYWORDS, settings
 from app.logging_setup import get_logger
 from app.storage.supabase import get_duplicate_urls, insert_news_batch
 
@@ -36,6 +36,39 @@ def get_llm_evaluator():
     return _llm_evaluator
 
 
+# Длительность новостной блокировки берётся из strategy_params, чтобы у окна
+# был один источник истины с торговым движком: settings.cooldown_hours (1 ч)
+# расходился с strategy_params.news_cooldown_hours (3 ч) и с комментарием в БД.
+# Снимок обновляется перед каждым батчем; настройка остаётся запасным значением.
+_cooldown_hours_cache: Optional[float] = None
+
+
+def _cooldown_hours() -> float:
+    """Актуальная длительность блокировки в часах."""
+    if _cooldown_hours_cache is not None:
+        return _cooldown_hours_cache
+    return float(settings.cooldown_hours)
+
+
+async def refresh_cooldown_hours(client: httpx.AsyncClient) -> float:
+    """Перечитать news_cooldown_hours из strategy_params."""
+    global _cooldown_hours_cache
+    try:
+        from app.strategy.params import get_params
+
+        params = await get_params(client)
+        hours = float(params.get("news_cooldown_hours") or 0)
+        if hours > 0:
+            _cooldown_hours_cache = hours
+    except Exception as exc:  # noqa: BLE001 — новостной путь не должен ломаться
+        logger.warning(
+            "[DB] Не удалось прочитать news_cooldown_hours (%s), использую %s ч",
+            exc,
+            _cooldown_hours(),
+        )
+    return _cooldown_hours()
+
+
 def _base_payload(
     *,
     source_api: str,
@@ -48,11 +81,9 @@ def _base_payload(
 ) -> Dict[str, Any]:
     """Create a base payload for the news_alerts table.
 
-    Fail-safe default: every article starts blocked until the LLM decides it is
-    safe.  This prevents a disabled or failing LLM from silently allowing
-    dangerous news through.
+    Articles start unblocked; the LLM evaluator decides whether to block them.
     """
-    cooldown = (now + timedelta(hours=settings.cooldown_hours)).isoformat()
+    cooldown = (now + timedelta(hours=_cooldown_hours())).isoformat()
     return {
         "source_api": source_api,
         "query_keywords": query_keywords,
@@ -62,10 +93,24 @@ def _base_payload(
         "raw_article": raw_article,
         "initial_cooldown_until": cooldown,
         "block_until": cooldown,
-        "is_blocked": True,
+        "is_blocked": False,
         "block_source": "AUTO",
         "telegram_sent": False,
     }
+
+
+def _format_source_api(prefix: str, source_name: Optional[str]) -> str:
+    """Return ``prefix(site_name)`` when the site name is known, else just prefix."""
+    name = (source_name or "").strip()
+    return f"{prefix}({name})" if name else prefix
+
+
+def _newsapi_source_name(art: Dict[str, Any]) -> str:
+    """Extract the human-readable source name from a NewsAPI article."""
+    source = art.get("source") or {}
+    if isinstance(source, dict):
+        return source.get("name") or ""
+    return str(source).strip()
 
 
 def map_newsapi_article(
@@ -88,7 +133,7 @@ def map_newsapi_article(
             pass
 
     return _base_payload(
-        source_api="newsapi",
+        source_api=_format_source_api("newsapi", _newsapi_source_name(art)),
         query_keywords=query or "",
         title=title,
         url=url,
@@ -118,7 +163,7 @@ def map_google_item(
             pass
 
     return _base_payload(
-        source_api="google",
+        source_api=_format_source_api("google", item.get("source")),
         query_keywords=query or "",
         title=title,
         url=url,
@@ -140,8 +185,8 @@ def map_russian_rss_item(
 
     published_at = item.get("published_at") or now.isoformat()
     return _base_payload(
-        source_api="rss_russian",
-        query_keywords=item.get("source", ""),
+        source_api=_format_source_api("rss_russian", item.get("source")),
+        query_keywords=RSS_QUERY_KEYWORDS,
         title=title,
         url=url,
         published_at=published_at,
@@ -209,6 +254,7 @@ async def save_newsapi_batch(
     """Map NewsAPI articles and run the shared save pipeline."""
 
     async def _run(c: httpx.AsyncClient) -> int:
+        await refresh_cooldown_hours(c)
         now = datetime.now(timezone.utc)
         payloads = [
             p
@@ -230,6 +276,7 @@ async def save_google_batch(
     """Map Google RSS items and run the shared save pipeline."""
 
     async def _run(c: httpx.AsyncClient) -> int:
+        await refresh_cooldown_hours(c)
         now = datetime.now(timezone.utc)
         payloads = [
             p for item in items if (p := map_google_item(item, query, now)) is not None
@@ -248,6 +295,7 @@ async def save_russian_rss_batch(
     """Map Russian RSS items and run the shared save pipeline."""
 
     async def _run(c: httpx.AsyncClient) -> int:
+        await refresh_cooldown_hours(c)
         now = datetime.now(timezone.utc)
         payloads = [
             p for item in items if (p := map_russian_rss_item(item, now)) is not None

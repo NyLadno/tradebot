@@ -8,3 +8,9 @@ beautifulsoup4
 google-genai
 tenacity
 pytz
+# Потоки котировок и заявок БКС
+websockets
+# Только для оффлайн-исследования (app/research); боевой цикл их не импортирует
+pandas
+numpy
+statsmodels

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Set
+from typing import Any, Dict, List, Optional, Set, Union
 
 import httpx
 
@@ -37,6 +37,88 @@ def _build_in_filter(urls: List[str]) -> str:
     """Build a PostgREST 'in.' filter safely escaping double quotes."""
     escaped = [f'"{url.replace(chr(34), chr(34) * 2)}"' for url in urls]
     return f"in.({','.join(escaped)})"
+
+
+async def select_rows(
+    table: str,
+    client: httpx.AsyncClient,
+    *,
+    select: str = "*",
+    filters: Optional[Dict[str, str]] = None,
+    order: Optional[str] = None,
+    limit: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    """Generic PostgREST SELECT against any table."""
+    params: Dict[str, Any] = {"select": select}
+    if filters:
+        params.update(filters)
+    if order:
+        params["order"] = order
+    if limit is not None:
+        params["limit"] = limit
+
+    resp = await client.get(
+        settings.rest_url(table), headers=HEADERS_GET, params=params, timeout=30.0
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+async def insert_rows(
+    table: str,
+    payload: Union[Dict[str, Any], List[Dict[str, Any]]],
+    client: httpx.AsyncClient,
+) -> List[Dict[str, Any]]:
+    """Generic PostgREST INSERT (single row or batch) against any table."""
+    resp = await client.post(
+        settings.rest_url(table), headers=HEADERS_POST, json=payload, timeout=30.0
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+async def upsert_rows(
+    table: str,
+    payload: Union[Dict[str, Any], List[Dict[str, Any]]],
+    client: httpx.AsyncClient,
+    *,
+    on_conflict: str,
+    ignore_duplicates: bool = False,
+) -> List[Dict[str, Any]]:
+    """Generic PostgREST UPSERT against a unique constraint.
+
+    ``on_conflict`` is a comma-separated column list matching a unique index,
+    e.g. ``"symbol,timestamp"`` for the candles table. Set
+    ``ignore_duplicates`` to keep the existing row instead of overwriting it.
+    """
+    resolution = "ignore-duplicates" if ignore_duplicates else "merge-duplicates"
+    headers = {**HEADERS_POST, "Prefer": f"return=representation,resolution={resolution}"}
+    resp = await client.post(
+        settings.rest_url(table),
+        headers=headers,
+        params={"on_conflict": on_conflict},
+        json=payload,
+        timeout=30.0,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+async def update_rows(
+    table: str,
+    filters: Dict[str, str],
+    patch: Dict[str, Any],
+    client: httpx.AsyncClient,
+) -> None:
+    """Generic PostgREST UPDATE (matching rows) against any table."""
+    resp = await client.patch(
+        settings.rest_url(table),
+        headers=HEADERS_PATCH,
+        params=filters,
+        json=patch,
+        timeout=30.0,
+    )
+    resp.raise_for_status()
 
 
 async def get_duplicate_urls(urls: List[str], client: httpx.AsyncClient) -> Set[str]:

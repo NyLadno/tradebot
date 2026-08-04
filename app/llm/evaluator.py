@@ -25,6 +25,7 @@ from app.llm.models import Factors, NewsRiskDecision
 from app.llm.prompts import SYSTEM_INSTRUCTION
 from app.logging_setup import get_logger
 from app.retry import async_retry
+from app.storage.logs import log_event
 
 try:
     from bs4 import BeautifulSoup
@@ -267,6 +268,14 @@ class LLMRiskEvaluator:
                 "tier0": False,
                 "reason": "Ошибка вызова/парсинга LLM, сработал fail-safe",
             }
+            if http_client is not None:
+                await log_event(
+                    "ERROR",
+                    "risk",
+                    f"LLM fail-safe block: {title[:50]}",
+                    http_client,
+                    details={"error": str(exc), "url": url},
+                )
 
         return payload
 

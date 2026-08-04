@@ -115,6 +115,27 @@ TELEGRAM_CHAT_ID=your_chat_id
 
 # Pipeline
 ENABLE_LLM_EVALUATION=true
+
+# --- БКС Trade API ---
+# Refresh-токены выпускаются в веб-версии БКС Мир инвестиций:
+# Профиль → Управление счетами → <счёт> → Токены API. Живут 90 суток.
+# READ хватает для PAPER; WRITE нужен только для LIVE.
+BCS_REFRESH_TOKEN_READ=your_read_token
+# BCS_REFRESH_TOKEN_WRITE=your_write_token
+BCS_TOKEN_STORE=.bcs_tokens.json
+BCS_API_BASE=https://be.broker.ru
+BCS_WS_BASE=wss://ws.broker.ru
+BCS_CLASS_CODE=TQBR
+
+# --- Торговый движок ---
+ENABLE_TRADING_ENGINE=true
+BCS_TRADING_MODE=PAPER      # PAPER | LIVE
+PAIR_LEG1=TATN
+PAIR_LEG2=TATNP
+
+# Секрет для /strategy/start и /strategy/stop (заголовок X-Bot-Token).
+# Пустое значение = управляющие эндпоинты отключены.
+BOT_ADMIN_TOKEN=
 ```
 
 > **Важно:** не коммитьте `.env` в репозиторий. Файл уже добавлен в `.gitignore`.
@@ -150,6 +171,86 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 | GET | `/business_tatneft_de` | Собрать немецкоязычные новости по Tatneft |
 | GET | `/fetch_russian_rss` | Запустить парсинг российских RSS-лент |
 | GET | `/news?query=...&lang=...&country=...` | Динамический поиск и сохранение |
+| GET | `/health` | Состояние приложения, WebSocket БКС и движка |
+| GET | `/strategy/state` | `bot_state`, активные параметры, текущий z-score |
+| GET | `/bcs/selftest` | Проверка связи с БКС (только чтение, заявок не шлёт) |
+| POST | `/strategy/stop?emergency=true` | Остановить торговлю (нужен `X-Bot-Token`) |
+| POST | `/strategy/start` | Возобновить торговлю (нужен `X-Bot-Token`) |
+
+---
+
+## Торговый контур (парный арбитраж TATN/TATNP)
+
+Вторая половина системы: подключение к **БКС Trade API**, поток минутных
+баров и котировок, расчёт z-score спреда и исполнение сделок.
+
+### Как это работает
+
+```
+БКС WebSocket (свечи M1 + котировки)   БКС REST (/candles-chart, догрузка)
+                │                                    │
+                └────────────────┬───────────────────┘
+                                 ▼
+                  app/strategy/engine.py — PairsEngine
+                  ln(TATN/TATNP) → скользящие mean/std → z-score
+                                 │
+        ┌────────────────────────┼────────────────────────┐
+        ▼                        ▼                        ▼
+  вход |z| ≥ entry_z      выход TP/STOP/           запись в candles,
+  (если сессия открыта,   TIMEOUT/NEWS             trades, bot_state
+   нет новостной                                   + Telegram ENTRY/EXIT
+   блокировки)
+```
+
+Параметры (`spread_window`, `entry_zscore`, `stop_zscore`, `min_hold_min`, …)
+читаются из таблицы `strategy_params` **на каждой итерации** с кэшем 60 секунд —
+их можно менять без рестарта.
+
+### Режимы
+
+- **`PAPER`** (по умолчанию) — котировки настоящие, заявки не отправляются.
+  Исполнение моделируется по противоположной стороне стакана: покупка по
+  `offer`, продажа по `bid`, то есть спред мы платим как в реальности.
+- **`LIVE`** — реальные заявки. Включается только после предстартовых проверок
+  (доступность шорта, маржа, незаблокированные инструменты); при неудаче
+  движок остаётся в `PAPER` и шлёт алерт. **У БКС нет sandbox.**
+
+### Защита
+
+- **Legging risk**: если исполнилась только одна нога, вторая немедленно
+  раскрывается рыночной заявкой, пишется `CRITICAL` и поднимается
+  `emergency_stop_flag`. Попыток «доисполнить» не делается.
+- **Новостная блокировка**: активные записи в `news_alerts` синхронизируются
+  в `bot_state.is_news_blocked`; при блокировке позиция закрывается с
+  `exit_reason='NEWS'`, новые входы запрещены.
+- **Разрывы данных**: молчание потока дольше `data_gap_alert_min` открывает
+  запись в `quote_gaps` и шлёт Telegram-алерт; после восстановления
+  пропущенные бары догружаются через REST.
+- **Аварийная остановка**: `emergency_stop_flag` в `bot_state` или
+  `POST /strategy/stop?emergency=true`.
+
+---
+
+## Исследование стратегии (`app/research`)
+
+Оффлайн-модули для честной проверки параметров. Боевой цикл их **не импортирует** —
+pandas/numpy/statsmodels нужны только здесь.
+
+```bash
+# Walk-forward: параметры подбираются на обучающем окне,
+# метрики снимаются на следующем, которого оптимизатор не видел
+python -m app.research.walkforward --from 2024-06-01 --to 2026-06-01
+
+# С учётом проскальзывания
+python -m app.research.walkforward --slippage-bps 3 --pair TATN TATNP
+```
+
+Отчёт включает оценку коинтеграции (Engle-Granger), тест Дики-Фуллера на
+стационарность спреда, half-life и вытекающий из него разумный размер окна,
+плюс сравнение in-sample и out-of-sample результатов по каждому окну.
+
+Данные для исследования тянутся с MOEX ISS (`app/market/moex_client.py`) и
+кэшируются в CSV (`candles_cache/`).
 
 ---
 
