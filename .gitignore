@@ -3,3 +3,10 @@
 venv/
 *.db
 *.log
+.bcs_tokens.json
+candles_cache/
+__pycache__/
+*.py[cod]
+.DS_Store
+.idea/
+.claude/settings.local.json

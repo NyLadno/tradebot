@@ -1,0 +1,9 @@
+# Только для оффлайн-исследования (app/research): бэктест, walk-forward,
+# коинтеграция, проскальзывание. Боевой цикл эти пакеты не импортирует,
+# поэтому они держатся отдельно — приложение поднимается и без них.
+#
+#   pip install -r requirements.txt -r requirements-research.txt
+
+pandas==3.0.5
+numpy==2.5.1
+statsmodels==0.14.6
