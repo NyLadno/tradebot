@@ -1,6 +1,29 @@
 # TradeBot — News Analysis Pipeline for TATNEFT Trading
 
+![Python](https://img.shields.io/badge/Python-3.11%2B-blue?logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-async-009688?logo=fastapi&logoColor=white)
+![Supabase](https://img.shields.io/badge/Supabase-supabase--py-3ECF8E?logo=supabase&logoColor=white)
+![Status](https://img.shields.io/badge/status-private-lightgrey)
+
 Асинхронный Python-pipeline для сбора новостей об эмитенте **Татнефть (TATN / TATNEFT)**, оценки рисков через LLM и оповещения о запрете торговли в Telegram.
+
+## Оглавление
+
+- [Возможности](#возможности)
+- [Архитектура](#архитектура)
+- [Структура проекта](#структура-проекта)
+- [Установка](#установка)
+- [Настройка окружения](#настройка-окружения)
+- [Запуск](#запуск)
+- [API Endpoints](#api-endpoints)
+- [Торговый контур](#торговый-контур-парный-арбитраж-tatntatnp)
+- [Исследование стратегии](#исследование-стратегии-appresearch)
+- [Логика риск-оценки](#логика-риск-оценки)
+- [Idempotency Telegram](#idempotency-telegram)
+- [Требования](#требования)
+- [Безопасность](#безопасность)
+- [Примечания](#примечания)
+- [Лицензия](#лицензия)
 
 ---
 
