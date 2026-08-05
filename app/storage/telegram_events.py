@@ -4,10 +4,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
-import httpx
-
 from app.logging_setup import get_logger
-from app.storage.supabase import insert_rows
+from app.storage.supabase import get_supabase
 
 logger = get_logger("tradebot.storage.telegram_events")
 
@@ -17,7 +15,6 @@ TABLE = "telegram_events"
 async def record_telegram_event(
     event_type: str,
     chat_id: int,
-    client: httpx.AsyncClient,
     message_text: Optional[str] = None,
     trade_uuid: Optional[str] = None,
     is_success: Optional[bool] = None,
@@ -46,6 +43,7 @@ async def record_telegram_event(
     payload.update({k: v for k, v in optional_fields.items() if v is not None})
 
     try:
-        await insert_rows(TABLE, payload, client)
-    except Exception as exc:
+        supabase = await get_supabase()
+        await supabase.table(TABLE).insert(payload).execute()
+    except Exception as exc:  # noqa: BLE001 — телеметрия не ломает отправку
         logger.error("[DB] Не удалось записать событие в telegram_events: %s", exc)

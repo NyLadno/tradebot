@@ -14,8 +14,6 @@ from __future__ import annotations
 import time
 from typing import Any, Callable, Dict, Optional
 
-import httpx
-
 from app.config import settings
 from app.logging_setup import get_logger
 from app.storage.strategy_params import get_strategy_params
@@ -130,16 +128,14 @@ class StrategyParamsCache:
         """Текущий снимок без обращения к БД (для эндпоинтов состояния)."""
         return dict(self._snapshot or FALLBACK_PARAMS)
 
-    async def get(
-        self, client: httpx.AsyncClient, *, force: bool = False
-    ) -> Dict[str, Any]:
+    async def get(self, *, force: bool = False) -> Dict[str, Any]:
         """Вернуть параметры, перечитав их из БД не чаще раза в TTL."""
         now = time.monotonic()
         if not force and self._snapshot is not None and now - self._fetched_at < self._ttl:
             return dict(self._snapshot)
 
         try:
-            raw = await get_strategy_params(client)
+            raw = await get_strategy_params()
         except Exception as exc:  # noqa: BLE001 — сеть не должна останавливать торговлю
             self._last_error = f"чтение strategy_params не удалось: {exc}"
             logger.error("[STRAT] %s", self._last_error)
@@ -190,6 +186,6 @@ def get_cache() -> StrategyParamsCache:
     return _cache
 
 
-async def get_params(client: httpx.AsyncClient, *, force: bool = False) -> Dict[str, Any]:
+async def get_params(*, force: bool = False) -> Dict[str, Any]:
     """Короткий доступ к параметрам стратегии."""
-    return await get_cache().get(client, force=force)
+    return await get_cache().get(force=force)

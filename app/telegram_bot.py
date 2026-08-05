@@ -13,7 +13,7 @@ import httpx
 
 from app.config import settings
 from app.logging_setup import get_logger
-from app.storage.supabase import mark_telegram_sent
+from app.storage.news_alerts import mark_telegram_sent
 from app.storage.telegram_events import record_telegram_event
 
 logger = get_logger("tradebot.telegram")
@@ -137,7 +137,6 @@ class TelegramAlertsBot:
                 await record_telegram_event(
                     event_type,
                     self._chat_id_int(chat_id),
-                    client,
                     message_text=message,
                     is_success=True,
                     **event_fields,
@@ -148,7 +147,6 @@ class TelegramAlertsBot:
                 await record_telegram_event(
                     event_type,
                     self._chat_id_int(chat_id),
-                    client,
                     message_text=message,
                     is_success=False,
                     error_text=str(exc),
@@ -237,12 +235,12 @@ class TelegramAlertsBot:
                     len(sent_to),
                     str(news_record.get("article_title", ""))[:50],
                 )
-            # Флаг обновляем ДО закрытия клиента: иначе запрос уйдёт
-            # в уже закрытое соединение и алерт продублируется.
+            # Без флага следующий проход отправит тот же алерт повторно,
+            # поэтому неудачу здесь обязательно видно в логах.
             if sent and news_record.get("id"):
                 try:
-                    await mark_telegram_sent(news_record["id"], active)
-                    news_record["telegram_sent"] = True
+                    if await mark_telegram_sent(news_record["id"]):
+                        news_record["telegram_sent"] = True
                 except Exception as exc:
                     logger.error("[TG] Не удалось обновить флаг telegram_sent: %s", exc)
         except Exception as exc:

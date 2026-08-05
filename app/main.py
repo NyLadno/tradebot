@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
@@ -20,6 +21,7 @@ from app.storage.bot_state import get_bot_state, update_bot_state
 from app.storage.heartbeat import record_heartbeat
 from app.storage.logs import log_event
 from app.storage.quote_gaps import get_unresolved_gaps
+from app.storage.supabase import close_supabase
 from app.storage.trades import get_open_trades, get_trades_closed_since
 
 logger = get_logger("tradebot.main")
@@ -60,9 +62,8 @@ async def _scheduled_russian_rss_fetch() -> None:
 
 async def _scheduled_heartbeat() -> None:
     """Write a periodic health snapshot to the heartbeat table."""
-    client = get_http_client()
     try:
-        await record_heartbeat(client, **await _health_metrics(client))
+        await record_heartbeat(**await _health_metrics())
     except Exception as exc:
         logger.error("[Heartbeat] Не удалось записать heartbeat: %s", exc)
 
@@ -82,19 +83,19 @@ async def _scheduled_engine_tick() -> None:
         logger.error("[STRAT] Watchdog-тик упал: %s", exc)
 
 
-async def _health_metrics(client) -> Dict[str, Any]:
+async def _health_metrics() -> Dict[str, Any]:
     """Собрать показатели для heartbeat и /health."""
     metrics: Dict[str, Any] = {"status": "OK"}
     problems: List[str] = []
 
     try:
-        open_trades = await get_open_trades(client)
+        open_trades = await get_open_trades()
         metrics["open_trade_count"] = len(open_trades)
     except Exception as exc:  # noqa: BLE001
         problems.append(f"trades: {exc}")
 
     try:
-        state = await get_bot_state(client)
+        state = await get_bot_state()
         if state:
             metrics["virtual_equity"] = float(state.get("virtual_balance") or 0.0)
             if state.get("emergency_stop_flag"):
@@ -106,7 +107,7 @@ async def _health_metrics(client) -> Dict[str, Any]:
         midnight_msk = datetime.now(timezone(timedelta(hours=3))).replace(
             hour=0, minute=0, second=0, microsecond=0
         )
-        closed = await get_trades_closed_since(midnight_msk.isoformat(), client)
+        closed = await get_trades_closed_since(midnight_msk.isoformat())
         metrics["today_pnl_rub"] = round(
             sum(float(row.get("net_pnl_rub") or 0.0) for row in closed), 2
         )
@@ -126,7 +127,7 @@ async def _health_metrics(client) -> Dict[str, Any]:
             problems.append(f"движок: {engine.last_error}")
 
     try:
-        gaps = await get_unresolved_gaps(client)
+        gaps = await get_unresolved_gaps()
         if gaps:
             problems.append(f"незакрытых разрывов данных: {len(gaps)}")
     except Exception as exc:  # noqa: BLE001
@@ -172,7 +173,7 @@ async def lifespan(app: FastAPI):
         "Планировщик запущен (MSK 09:00–22:00). "
         "Google/RSS: каждые 5 мин. NewsAPI: 0/24/48 мин. Heartbeat: каждые 10 мин."
     )
-    await log_event("INFO", "system", "Планировщик запущен", client)
+    await log_event("INFO", "system", "Планировщик запущен")
 
     yield
 
@@ -180,9 +181,10 @@ async def lifespan(app: FastAPI):
     logger.info("Планировщик остановлен.")
     if engine is not None:
         await engine.stop()
-    await log_event("INFO", "system", "Планировщик остановлен", client)
+    await log_event("INFO", "system", "Планировщик остановлен")
     await close_http_client()
-    logger.info("HTTP-клиент закрыт.")
+    await close_supabase()
+    logger.info("HTTP-клиент и клиент Supabase закрыты.")
 
 
 async def _start_engine(client) -> None:
@@ -207,9 +209,7 @@ async def _start_engine(client) -> None:
     except Exception as exc:  # noqa: BLE001 — движок не должен ронять приложение
         engine = None
         logger.error("[STRAT] Не удалось запустить торговый движок: %s", exc)
-        await log_event(
-            "ERROR", "system", f"Торговый движок не запущен: {exc}", client
-        )
+        await log_event("ERROR", "system", f"Торговый движок не запущен: {exc}")
 
 
 app = FastAPI(lifespan=lifespan)
@@ -223,8 +223,6 @@ async def _get_and_save_news(
     ceid: str,
 ) -> Dict[str, Any]:
     """Fetch Google RSS and NewsAPI in parallel and persist new articles."""
-    import asyncio
-
     client = get_http_client()
     google_items, newsapi_articles = await asyncio.gather(
         fetch_google_news(query, hl, gl, ceid, client),
@@ -306,8 +304,7 @@ def _require_admin(token: Optional[str]) -> None:
 @app.get("/health")
 async def health() -> Dict[str, Any]:
     """Состояние приложения, потока котировок и торгового движка."""
-    client = get_http_client()
-    metrics = await _health_metrics(client)
+    metrics = await _health_metrics()
     return {
         "status": metrics.get("status", "OK"),
         "scheduler_running": scheduler.running,
@@ -319,16 +316,15 @@ async def health() -> Dict[str, Any]:
 @app.get("/strategy/state")
 async def strategy_state() -> Dict[str, Any]:
     """Снимок bot_state, активных параметров и текущего z-score."""
-    client = get_http_client()
     from app.strategy.params import get_cache, get_params
 
     try:
-        params = await get_params(client)
+        params = await get_params()
     except Exception as exc:  # noqa: BLE001
         params = {"error": str(exc)}
 
     return {
-        "bot_state": await get_bot_state(client),
+        "bot_state": await get_bot_state(),
         "params": params,
         "params_error": get_cache().last_error,
         "engine": engine.status() if engine is not None else {"started": False},
@@ -347,16 +343,14 @@ async def strategy_stop(
     движок на ближайшем тике закроет открытую позицию.
     """
     _require_admin(x_bot_token)
-    client = get_http_client()
     patch: Dict[str, Any] = {"is_running": False}
     if emergency:
         patch["emergency_stop_flag"] = True
-    await update_bot_state(patch, client)
+    await update_bot_state(patch)
     await log_event(
         "WARNING",
         "system",
         f"Торговля остановлена через API (emergency={emergency})",
-        client,
     )
     return {"status": "ok", "applied": patch}
 
@@ -367,10 +361,9 @@ async def strategy_start(
 ) -> Dict[str, Any]:
     """Возобновить торговлю и снять аварийный флаг."""
     _require_admin(x_bot_token)
-    client = get_http_client()
     patch = {"is_running": True, "emergency_stop_flag": False}
-    await update_bot_state(patch, client)
-    await log_event("INFO", "system", "Торговля возобновлена через API", client)
+    await update_bot_state(patch)
+    await log_event("INFO", "system", "Торговля возобновлена через API")
     return {"status": "ok", "applied": patch}
 
 

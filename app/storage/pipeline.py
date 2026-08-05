@@ -10,7 +10,7 @@ import httpx
 
 from app.config import RSS_QUERY_KEYWORDS, settings
 from app.logging_setup import get_logger
-from app.storage.supabase import get_duplicate_urls, insert_news_batch
+from app.storage.news_alerts import get_duplicate_urls, insert_news_batch
 
 logger = get_logger("tradebot.pipeline")
 
@@ -50,13 +50,13 @@ def _cooldown_hours() -> float:
     return float(settings.cooldown_hours)
 
 
-async def refresh_cooldown_hours(client: httpx.AsyncClient) -> float:
+async def refresh_cooldown_hours() -> float:
     """Перечитать news_cooldown_hours из strategy_params."""
     global _cooldown_hours_cache
     try:
         from app.strategy.params import get_params
 
-        params = await get_params(client)
+        params = await get_params()
         hours = float(params.get("news_cooldown_hours") or 0)
         if hours > 0:
             _cooldown_hours_cache = hours
@@ -200,12 +200,27 @@ async def process_and_save(
     client: httpx.AsyncClient,
     source_label: str,
 ) -> int:
-    """Dedupe payloads against DB, optionally run LLM evaluation, then insert."""
+    """Dedupe payloads against DB, optionally run LLM evaluation, then insert.
+
+    ``client`` нужен LLM-оценщику: он скачивает тексты статей по ссылкам.
+    К Supabase он отношения не имеет — там свой клиент.
+    """
     if not payloads:
         return 0
 
     urls = [p["article_url"] for p in payloads]
-    duplicates = await get_duplicate_urls(urls, client)
+    try:
+        duplicates = await get_duplicate_urls(urls)
+    except Exception as exc:  # noqa: BLE001
+        # Считать «дубликатов нет» при недоступной БД нельзя: тогда весь батч
+        # уйдёт в LLM на переоценку и будет вставлен повторно. Пропускаем —
+        # следующий проход через 5 минут заберёт эти же статьи.
+        logger.error(
+            "[DB] Проверка дублей для %s не удалась (%s) — батч пропущен",
+            source_label,
+            exc,
+        )
+        return 0
 
     seen_urls: set = set()
     filtered: List[Dict[str, Any]] = []
@@ -232,7 +247,7 @@ async def process_and_save(
         )
         filtered = await evaluator.evaluate_news_batch(filtered, http_client=client)
 
-    return await insert_news_batch(filtered, client)
+    return await insert_news_batch(filtered)
 
 
 async def _with_client(
@@ -254,7 +269,7 @@ async def save_newsapi_batch(
     """Map NewsAPI articles and run the shared save pipeline."""
 
     async def _run(c: httpx.AsyncClient) -> int:
-        await refresh_cooldown_hours(c)
+        await refresh_cooldown_hours()
         now = datetime.now(timezone.utc)
         payloads = [
             p
@@ -276,7 +291,7 @@ async def save_google_batch(
     """Map Google RSS items and run the shared save pipeline."""
 
     async def _run(c: httpx.AsyncClient) -> int:
-        await refresh_cooldown_hours(c)
+        await refresh_cooldown_hours()
         now = datetime.now(timezone.utc)
         payloads = [
             p for item in items if (p := map_google_item(item, query, now)) is not None
@@ -295,7 +310,7 @@ async def save_russian_rss_batch(
     """Map Russian RSS items and run the shared save pipeline."""
 
     async def _run(c: httpx.AsyncClient) -> int:
-        await refresh_cooldown_hours(c)
+        await refresh_cooldown_hours()
         now = datetime.now(timezone.utc)
         payloads = [
             p for item in items if (p := map_russian_rss_item(item, now)) is not None

@@ -4,15 +4,12 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
-import httpx
-
-from app.storage.supabase import insert_rows
+from app.storage.supabase import Row, get_supabase
 
 TABLE = "heartbeat"
 
 
 async def record_heartbeat(
-    client: httpx.AsyncClient,
     status: Optional[str] = None,
     last_quote_age_sec: Optional[int] = None,
     open_trade_count: Optional[int] = None,
@@ -22,7 +19,7 @@ async def record_heartbeat(
     cpu_usage_pct: Optional[float] = None,
     db_size_mb: Optional[float] = None,
     details: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
+) -> Row:
     """Insert one heartbeat row; ``timestamp`` is left to the DB default (now()).
 
     Only fields the caller actually has data for are sent; there is no
@@ -43,5 +40,6 @@ async def record_heartbeat(
     }
     payload.update({k: v for k, v in optional_fields.items() if v is not None})
 
-    rows = await insert_rows(TABLE, payload, client)
-    return rows[0] if rows else {}
+    supabase = await get_supabase()
+    resp = await supabase.table(TABLE).insert(payload).execute()
+    return resp.data[0] if resp.data else {}

@@ -12,37 +12,13 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
-
-import httpx
+from typing import Any, Dict, List
 
 from app.config import settings
 from app.logging_setup import get_logger
-from app.storage.supabase import select_rows
+from app.storage.news_alerts import get_active_blocks
 
 logger = get_logger("tradebot.strategy.news")
-
-TABLE = "news_alerts"
-
-
-async def get_active_blocks(
-    client: httpx.AsyncClient, *, now: Optional[datetime] = None
-) -> List[Dict[str, Any]]:
-    """Алерты, которые прямо сейчас блокируют торговлю.
-
-    Активен алерт с ``is_blocked = true`` и ещё не истёкшим ``block_until``.
-    Просроченные записи считаем снятыми (AUTO_EXPIRED) и не учитываем.
-    """
-    moment = (now or datetime.now(timezone.utc)).isoformat()
-    return await select_rows(
-        TABLE,
-        client,
-        select="id,article_title,block_until,block_source,is_blocked,extended_until",
-        filters={"is_blocked": "eq.true", "block_until": f"gt.{moment}"},
-        order="block_until.desc",
-        limit=50,
-    )
 
 
 def summarize(blocks: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -68,9 +44,7 @@ def summarize(blocks: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
-async def sync_bot_state(
-    client: httpx.AsyncClient, state: Dict[str, Any]
-) -> Dict[str, Any]:
+async def sync_bot_state(state: Dict[str, Any]) -> Dict[str, Any]:
     """Пересчитать блокировку и вернуть патч, если состояние изменилось.
 
     Патч возвращается вызывающему коду, а не применяется здесь, чтобы
@@ -78,7 +52,7 @@ async def sync_bot_state(
     в один PATCH-запрос.
     """
     try:
-        blocks = await get_active_blocks(client)
+        blocks = await get_active_blocks()
     except Exception as exc:  # noqa: BLE001 — новостной сбой не должен ронять цикл
         logger.error("[NEWS] Не удалось прочитать активные блокировки: %s", exc)
         # Fail-safe совпадает с политикой LLM-оценщика: при неизвестности —

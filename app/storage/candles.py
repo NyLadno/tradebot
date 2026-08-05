@@ -4,9 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-import httpx
-
-from app.storage.supabase import select_rows, upsert_rows
+from app.storage.supabase import Row, Rows, get_supabase
 
 TABLE = "candles"
 
@@ -22,10 +20,9 @@ async def insert_candle(
     high_price: float,
     low_price: float,
     close_price: float,
-    client: httpx.AsyncClient,
     volume: Optional[int] = None,
     source: str = "BKS",
-) -> Dict[str, Any]:
+) -> Row:
     """Insert one OHLCV bar; returns the inserted row."""
     payload: Dict[str, Any] = {
         "symbol": symbol,
@@ -39,8 +36,9 @@ async def insert_candle(
     if volume is not None:
         payload["volume"] = volume
 
-    rows = await upsert_rows(TABLE, payload, client, on_conflict=ON_CONFLICT)
-    return rows[0] if rows else {}
+    supabase = await get_supabase()
+    resp = await supabase.table(TABLE).upsert(payload, on_conflict=ON_CONFLICT).execute()
+    return resp.data[0] if resp.data else {}
 
 
 def dedupe_candles(candles: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -57,9 +55,7 @@ def dedupe_candles(candles: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return list(unique.values())
 
 
-async def insert_candles_batch(
-    candles: List[Dict[str, Any]], client: httpx.AsyncClient
-) -> List[Dict[str, Any]]:
+async def insert_candles_batch(candles: List[Dict[str, Any]]) -> Rows:
     """Batch-upsert bars already matching the DB column names.
 
     Uses ON CONFLICT (symbol, timestamp) so WebSocket reconnects and REST
@@ -68,19 +64,24 @@ async def insert_candles_batch(
     """
     if not candles:
         return []
-    return await upsert_rows(
-        TABLE, dedupe_candles(candles), client, on_conflict=ON_CONFLICT
+    supabase = await get_supabase()
+    resp = await (
+        supabase.table(TABLE)
+        .upsert(dedupe_candles(candles), on_conflict=ON_CONFLICT)
+        .execute()
     )
+    return resp.data
 
 
-async def get_latest_candles(
-    symbol: str, limit: int, client: httpx.AsyncClient
-) -> List[Dict[str, Any]]:
+async def get_latest_candles(symbol: str, limit: int) -> Rows:
     """Return the most recent ``limit`` bars for ``symbol``, newest first."""
-    return await select_rows(
-        TABLE,
-        client,
-        filters={"symbol": f"eq.{symbol}"},
-        order="timestamp.desc",
-        limit=limit,
+    supabase = await get_supabase()
+    resp = await (
+        supabase.table(TABLE)
+        .select("*")
+        .eq("symbol", symbol)
+        .order("timestamp", desc=True)
+        .limit(limit)
+        .execute()
     )
+    return resp.data

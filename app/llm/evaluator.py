@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 import math
 import re
 from datetime import datetime, timezone
@@ -268,14 +267,12 @@ class LLMRiskEvaluator:
                 "tier0": False,
                 "reason": "Ошибка вызова/парсинга LLM, сработал fail-safe",
             }
-            if http_client is not None:
-                await log_event(
-                    "ERROR",
-                    "risk",
-                    f"LLM fail-safe block: {title[:50]}",
-                    http_client,
-                    details={"error": str(exc), "url": url},
-                )
+            await log_event(
+                "ERROR",
+                "risk",
+                f"LLM fail-safe block: {title[:50]}",
+                details={"error": str(exc), "url": url},
+            )
 
         return payload
 

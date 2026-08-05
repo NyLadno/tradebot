@@ -4,10 +4,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
-import httpx
-
 from app.logging_setup import get_logger
-from app.storage.supabase import insert_rows
+from app.storage.supabase import get_supabase
 
 logger = get_logger("tradebot.storage.logs")
 
@@ -18,7 +16,6 @@ async def log_event(
     level: str,
     component: str,
     message: str,
-    client: httpx.AsyncClient,
     details: Optional[Dict[str, Any]] = None,
     trade_uuid: Optional[str] = None,
 ) -> None:
@@ -38,6 +35,7 @@ async def log_event(
         payload["trade_uuid"] = trade_uuid
 
     try:
-        await insert_rows(TABLE, payload, client)
-    except Exception as exc:
+        supabase = await get_supabase()
+        await supabase.table(TABLE).insert(payload).execute()
+    except Exception as exc:  # noqa: BLE001 — журнал не ломает бизнес-путь
         logger.error("[DB] Не удалось записать событие в logs: %s", exc)

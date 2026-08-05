@@ -121,7 +121,7 @@ class PairsEngine:
     async def start(self) -> None:
         """Прогреть окно, поднять потоки и подписаться на данные."""
         settings.validate_bcs()
-        params = await get_params(self._http, force=True)
+        params = await get_params(force=True)
         window = int(params["spread_window"])
 
         self.instruments = await self._rest.get_instruments(self.symbols)
@@ -152,7 +152,7 @@ class PairsEngine:
             f"окно {window}, вход z={params['entry_zscore']}, стоп z={params['stop_zscore']}"
         )
         logger.info("[STRAT] %s", message)
-        await log_event("INFO", "strategy", message, self._http)
+        await log_event("INFO", "strategy", message)
 
     async def _build_executor(self, params: Dict[str, Any]) -> ExecutionAdapter:
         """Выбрать режим исполнения.
@@ -189,9 +189,7 @@ class PairsEngine:
             logger.warning(
                 "[STRAT] РЕЖИМ LIVE: заявки будут отправляться на реальный счёт"
             )
-            await log_event(
-                "WARNING", "strategy", "Движок запущен в режиме LIVE", self._http
-            )
+            await log_event("WARNING", "strategy", "Движок запущен в режиме LIVE")
             return live
         except Exception as exc:  # noqa: BLE001
             message = (
@@ -199,7 +197,7 @@ class PairsEngine:
                 "Работаю в PAPER."
             )
             logger.error("[STRAT] %s", message)
-            await log_event("ERROR", "strategy", message, self._http)
+            await log_event("ERROR", "strategy", message)
             await self._notify_error(message)
             return paper
 
@@ -235,7 +233,7 @@ class PairsEngine:
         """Заполнить окно: сперва из БД, недостающее — из REST БКС."""
         for symbol in self.symbols:
             try:
-                rows = await get_latest_candles(symbol, window, self._http)
+                rows = await get_latest_candles(symbol, window)
             except Exception as exc:  # noqa: BLE001
                 logger.error("[STRAT] Не удалось прочитать бары %s из БД: %s", symbol, exc)
                 rows = []
@@ -320,7 +318,6 @@ class PairsEngine:
                     "ERROR",
                     "strategy",
                     f"Ошибка торгового цикла: {exc}",
-                    self._http,
                     details={"consecutive_errors": self._consecutive_errors},
                 )
                 await self._notify_error(f"Ошибка торгового цикла: {exc}")
@@ -336,8 +333,8 @@ class PairsEngine:
                 self.last_tick_at = datetime.now(timezone.utc)
 
     async def _tick_inner(self) -> None:
-        params = await get_params(self._http)
-        state = await get_bot_state(self._http)
+        params = await get_params()
+        state = await get_bot_state()
         if not state:
             raise RuntimeError("bot_state пуста — нет строки id=1")
 
@@ -348,12 +345,12 @@ class PairsEngine:
         stats = self._compute_stats(window)
         patch: Dict[str, Any] = self._market_patch(stats)
 
-        news_patch = await news_guard.sync_bot_state(self._http, state)
+        news_patch = await news_guard.sync_bot_state(state)
         patch.update(news_patch)
         state.update(news_patch)
 
         if patch:
-            await update_bot_state(patch, self._http)
+            await update_bot_state(patch)
 
         spread_now, mean, std, zscore = stats
         self.last_zscore = zscore
@@ -454,7 +451,7 @@ class PairsEngine:
         batch = [bar.to_db_row() for bar in self._unsaved]
         self._unsaved = []
         try:
-            await insert_candles_batch(batch, self._http)
+            await insert_candles_batch(batch)
         except Exception as exc:  # noqa: BLE001
             logger.error("[STRAT] Не удалось сохранить %s баров: %s", len(batch), exc)
 
@@ -491,7 +488,7 @@ class PairsEngine:
         started_at = datetime.now(timezone.utc)
         try:
             gap = await open_quote_gap(
-                started_at.isoformat(), self._http, affected_symbols=",".join(self.symbols)
+                started_at.isoformat(), affected_symbols=",".join(self.symbols)
             )
         except Exception as exc:  # noqa: BLE001
             logger.error("[STRAT] Не удалось зафиксировать разрыв данных: %s", exc)
@@ -504,7 +501,7 @@ class PairsEngine:
             f"{params.get('data_gap_alert_min')} мин"
         )
         logger.error("[STRAT] %s", message)
-        await log_event("ERROR", "quotes", message, self._http)
+        await log_event("ERROR", "quotes", message)
         await self._notify_data_gap({"started_at": started_at.isoformat(), "message": message})
 
     async def _close_gap_if_open(self) -> None:
@@ -519,7 +516,7 @@ class PairsEngine:
         self._gap_started_at = None
 
         try:
-            await close_quote_gap(gap_id, ended_at.isoformat(), duration_min, self._http)
+            await close_quote_gap(gap_id, ended_at.isoformat(), duration_min)
         except Exception as exc:  # noqa: BLE001
             logger.error("[STRAT] Не удалось закрыть разрыв #%s: %s", gap_id, exc)
 
@@ -672,7 +669,7 @@ class PairsEngine:
             return
         except ExecutionError as exc:
             logger.error("[STRAT] Вход не состоялся: %s", exc)
-            await log_event("ERROR", "strategy", f"Вход не состоялся: {exc}", self._http)
+            await log_event("ERROR", "strategy", f"Вход не состоялся: {exc}")
             return
 
         entry_time = fills.time
@@ -684,7 +681,6 @@ class PairsEngine:
                 leg2_entry_price=fills.leg2.price,
                 spread_entry=round(spread_now, 8) if spread_now is not None else 0.0,
                 zscore_entry=round(zscore, 4) if zscore is not None else 0.0,
-                client=self._http,
                 mode=self._executor.mode,
                 leg1_qty=fills.leg1.quantity,
                 leg2_qty=fills.leg2.quantity,
@@ -709,8 +705,7 @@ class PairsEngine:
             {
                 "current_position": direction,
                 "current_trade_uuid": trade.get("trade_uuid"),
-            },
-            self._http,
+            }
         )
 
         entry_commission = fills.total_commission
@@ -721,7 +716,7 @@ class PairsEngine:
         )
         logger.info("[STRAT] %s", message)
         await log_event(
-            "INFO", "strategy", message, self._http, trade_uuid=trade.get("trade_uuid")
+            "INFO", "strategy", message, trade_uuid=trade.get("trade_uuid")
         )
         await self._notify_entry(trade, fills, zscore)
 
@@ -855,14 +850,14 @@ class PairsEngine:
             return
         except ExecutionError as exc:
             logger.error("[STRAT] Закрытие не состоялось: %s", exc)
-            await log_event("ERROR", "strategy", f"Закрытие не состоялось: {exc}", self._http)
+            await log_event("ERROR", "strategy", f"Закрытие не состоялось: {exc}")
             return
 
         patch = self._build_close_patch(trade, params, fills, spread_now, zscore, reason)
         trade_uuid = str(trade.get("trade_uuid"))
 
         try:
-            await close_trade(trade_uuid, patch, self._http)
+            await close_trade(trade_uuid, patch)
         except Exception as exc:  # noqa: BLE001
             logger.critical(
                 "[STRAT] Позиция закрыта, но запись в trades не удалась: %s", exc
@@ -879,7 +874,7 @@ class PairsEngine:
             f"(удержано {patch['hold_time_min']} мин)"
         )
         logger.info("[STRAT] %s", message)
-        await log_event("INFO", "strategy", message, self._http, trade_uuid=trade_uuid)
+        await log_event("INFO", "strategy", message, trade_uuid=trade_uuid)
         await self._notify_exit({**trade, **patch}, fills, zscore)
 
         self._open_trade_peak = None
@@ -964,7 +959,7 @@ class PairsEngine:
 
     async def _update_state_after_exit(self, patch: Dict[str, Any]) -> None:
         """Обновить агрегаты в bot_state после закрытия сделки."""
-        state = await get_bot_state(self._http)
+        state = await get_bot_state()
         net = float(patch.get("net_pnl_rub") or 0.0)
         total_trades = int(state.get("total_trades_count") or 0) + 1
         total_pnl = float(state.get("total_net_pnl_rub") or 0.0) + net
@@ -977,14 +972,13 @@ class PairsEngine:
                 "total_trades_count": total_trades,
                 "total_net_pnl_rub": round(total_pnl, 2),
                 "virtual_balance": round(balance, 2),
-            },
-            self._http,
+            }
         )
 
     async def _current_trade(self, state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Открытая сделка из БД (источник истины — таблица trades)."""
         try:
-            open_trades = await get_open_trades(self._http)
+            open_trades = await get_open_trades()
         except Exception as exc:  # noqa: BLE001
             logger.error("[STRAT] Не удалось прочитать открытые сделки: %s", exc)
             return None
@@ -996,8 +990,7 @@ class PairsEngine:
                     state.get("current_position"),
                 )
                 await update_bot_state(
-                    {"current_position": POSITION_NONE, "current_trade_uuid": None},
-                    self._http,
+                    {"current_position": POSITION_NONE, "current_trade_uuid": None}
                 )
             return None
 
@@ -1017,10 +1010,10 @@ class PairsEngine:
         """Выставить аварийный флаг: новые входы прекращаются немедленно."""
         logger.critical("[STRAT] АВАРИЙНАЯ ОСТАНОВКА: %s", reason)
         try:
-            await update_bot_state({"emergency_stop_flag": True}, self._http)
+            await update_bot_state({"emergency_stop_flag": True})
         except Exception as exc:  # noqa: BLE001
             logger.critical("[STRAT] Не удалось выставить emergency_stop_flag: %s", exc)
-        await log_event("CRITICAL", "strategy", f"Аварийная остановка: {reason}", self._http)
+        await log_event("CRITICAL", "strategy", f"Аварийная остановка: {reason}")
         await self._notify_error(f"АВАРИЙНАЯ ОСТАНОВКА: {reason}")
 
     async def _notify_entry(self, trade: Dict[str, Any], fills: PairFill, zscore: float) -> None:

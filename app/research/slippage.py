@@ -392,21 +392,25 @@ async def load_from_db(
     mode: str = "PAPER", *, limit_candles: int = 20000
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """Забрать сделки и бары из Supabase."""
-    from app.http_client import close_http_client, get_http_client
-    from app.storage.supabase import select_rows
+    from app.storage.supabase import close_supabase, get_supabase
 
-    client = get_http_client()
+    supabase = await get_supabase()
     try:
-        filters = {"mode": f"eq.{mode}"} if mode != "ALL" else None
-        trades = await select_rows(
-            "trades", client, filters=filters, order="entry_time.asc"
-        )
-        candles = await select_rows(
-            "candles", client, order="timestamp.desc", limit=limit_candles
-        )
+        query = supabase.table("trades").select("*")
+        if mode != "ALL":
+            query = query.eq("mode", mode)
+        trades = (await query.order("entry_time").execute()).data
+
+        candles = (
+            await supabase.table("candles")
+            .select("*")
+            .order("timestamp", desc=True)
+            .limit(limit_candles)
+            .execute()
+        ).data
         return trades, candles
     finally:
-        await close_http_client()
+        await close_supabase()
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:

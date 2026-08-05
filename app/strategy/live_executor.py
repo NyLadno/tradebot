@@ -244,7 +244,7 @@ class LiveExecutor:
             f"а {', '.join(missing)} — нет. Позиция не рыночно-нейтральна."
         )
         logger.critical("[LIVE] %s", message)
-        await log_event("CRITICAL", "strategy", message, self._http)
+        await log_event("CRITICAL", "strategy", message)
 
         if not unwind_on_failure:
             raise LeggingRiskError(message)
@@ -431,14 +431,14 @@ class LiveExecutor:
         if ok:
             message = f"Нога {fill.ticker} x{fill.quantity} раскрыта по рынку"
             logger.critical("[LIVE] %s", message)
-            await log_event("CRITICAL", "strategy", message, self._http)
+            await log_event("CRITICAL", "strategy", message)
         else:
             message = (
                 f"НЕ УДАЛОСЬ раскрыть ногу {fill.ticker} x{fill.quantity}. "
                 "Требуется ручное вмешательство в терминале БКС!"
             )
             logger.critical("[LIVE] %s", message)
-            await log_event("CRITICAL", "strategy", message, self._http)
+            await log_event("CRITICAL", "strategy", message)
 
         self.emergency_reason = message
         await self._notify(message)
@@ -506,7 +506,7 @@ class LiveExecutor:
                 f"при лоте {lot_size}. Размер позиции завышен в {lot_size} раз!"
             )
             logger.critical("[LIVE] %s", message)
-            await log_event("CRITICAL", "strategy", message, self._http)
+            await log_event("CRITICAL", "strategy", message)
             await self._notify(message)
             self.emergency_reason = message
         else:

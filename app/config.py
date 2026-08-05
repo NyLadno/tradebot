@@ -17,10 +17,20 @@ class Settings:
 
     news_api_key: str = field(default_factory=lambda: os.getenv("NEWS_API", ""))
     supabase_url: str = field(
-        default_factory=lambda: os.getenv("NEXT_PUBLIC_SUPABASE_URL", "").rstrip("/")
+        default_factory=lambda: (
+            os.getenv("SUPABASE_URL")
+            or os.getenv("NEXT_PUBLIC_SUPABASE_URL", "")
+        ).rstrip("/")
     )
+    # Бот — доверенный серверный процесс, а не браузерный клиент: ему нужен
+    # секретный ключ. Все таблицы закрыты RLS-политикой «Deny all for anon»,
+    # поэтому с публикуемым ключом SELECT'ы вернут пустоту, а UPDATE'ы молча
+    # не изменят ни строки. Старое имя NEXT_PUBLIC_… читается последним,
+    # чтобы не сломать уже развёрнутые .env.
     supabase_key: str = field(
-        default_factory=lambda: os.getenv("NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY", "")
+        default_factory=lambda: os.getenv("SUPABASE_SECRET_KEY")
+        or os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+        or os.getenv("NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY", "")
     )
     supabase_table: str = field(
         default_factory=lambda: os.getenv("SUPABASE_TABLE", "news_alerts")
@@ -82,6 +92,23 @@ class Settings:
 
     http_timeout: float = 30.0
     scrape_timeout: float = 15.0
+    cooldown_hours: int = 1
+    news_lookback_days: int = 7
+    retry_max_attempts: int = 3
+    retry_min_wait: float = 1.0
+    retry_max_wait: float = 10.0
+    llm_max_concurrency: int = 5
+    llm_max_article_chars: int = 8000
+
+    # Тайминги торгового контура (не выносим в env — меняются только с кодом)
+    bcs_token_refresh_margin_sec: int = 300
+    bcs_ws_reconnect_min: float = 1.0
+    bcs_ws_reconnect_max: float = 60.0
+    bcs_ws_ping_interval: float = 20.0
+    bcs_order_poll_sec: float = 1.0
+    bcs_order_timeout_sec: float = 30.0
+    strategy_params_ttl_sec: float = 60.0
+    strategy_max_consecutive_errors: int = 3
 
     @property
     def telegram_chat_ids(self) -> List[str]:
@@ -114,23 +141,6 @@ class Settings:
                 # Ignore malformed values.
                 continue
         return thread_ids
-    cooldown_hours: int = 1
-    news_lookback_days: int = 7
-    retry_max_attempts: int = 3
-    retry_min_wait: float = 1.0
-    retry_max_wait: float = 10.0
-    llm_max_concurrency: int = 5
-    llm_max_article_chars: int = 8000
-
-    # Тайминги торгового контура (не выносим в env — меняются только с кодом)
-    bcs_token_refresh_margin_sec: int = 300
-    bcs_ws_reconnect_min: float = 1.0
-    bcs_ws_reconnect_max: float = 60.0
-    bcs_ws_ping_interval: float = 20.0
-    bcs_order_poll_sec: float = 1.0
-    bcs_order_timeout_sec: float = 30.0
-    strategy_params_ttl_sec: float = 60.0
-    strategy_max_consecutive_errors: int = 3
 
     @property
     def pair_symbols(self) -> List[str]:
@@ -142,19 +152,17 @@ class Settings:
         """True, если движку разрешено отправлять реальные заявки."""
         return self.trading_mode == "LIVE"
 
-    def rest_url(self, table: str) -> str:
-        """Full Supabase REST URL for an arbitrary table."""
-        return f"{self.supabase_url}/rest/v1/{table}"
-
-    @property
-    def supabase_rest_url(self) -> str:
-        """Full Supabase REST URL for the configured (news_alerts) table."""
-        return self.rest_url(self.supabase_table)
-
     def validate_supabase(self) -> None:
-        """Raise if Supabase credentials are missing."""
+        """Raise if Supabase credentials are missing.
+
+        Вызывается лениво из ``app.storage.supabase.get_supabase()``, а не на
+        импорте модуля: иначе отсутствие ``.env`` роняет импорт всего
+        приложения и делает storage нетестируемым.
+        """
         if not self.supabase_url or not self.supabase_key:
-            raise ValueError("SUPABASE_URL и SUPABASE_KEY должны быть в .env")
+            raise ValueError(
+                "SUPABASE_URL и SUPABASE_SECRET_KEY должны быть в .env"
+            )
 
     def validate_bcs(self) -> None:
         """Raise if БКС credentials are missing for the configured trading mode.

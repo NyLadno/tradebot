@@ -40,7 +40,7 @@
       ┌──────────────┐ ┌───────────────┐ ┌──────────────┐
       │  Supabase    │ │  Telegram Bot │ │  LLM Gemini  │
       │  app/storage/│ │ app/telegram │ │ app/llm/     │
-      │  supabase.py │ │ _bot.py       │ │ evaluator.py │
+      │ news_alerts  │ │ _bot.py       │ │ evaluator.py │
       └──────────────┘ └───────────────┘ └──────────────┘
 ```
 
@@ -67,11 +67,16 @@
 │   │   ├── filters.py         # Фильтр релевантности Татнефти
 │   │   └── rss_utils.py       # Утилиты парсинга RSS
 │   ├── storage/
-│   │   ├── supabase.py        # Низкоуровневые запросы к Supabase
+│   │   ├── supabase.py        # Клиент supabase-py (синглтон, жизненный цикл)
+│   │   ├── news_alerts.py     # Новостная таблица: вставка, дедуп, блокировки
+│   │   ├── bot_state.py       # Остальные таблицы — по модулю на таблицу
 │   │   └── pipeline.py        # Общий pipeline сохранения
 │   └── telegram_bot.py        # Telegram-уведомления
+├── migrations/                # Инкрементальные правки схемы (SQL)
 ├── main.py                    # Точка входа uvicorn
-├── requirements.txt
+├── requirements.txt           # Боевой контур
+├── requirements-research.txt  # pandas/numpy/statsmodels для app/research
+├── .env.example
 └── README.md
 ```
 
@@ -87,19 +92,38 @@ source .venv/bin/activate  # Linux/macOS
 pip install -r requirements.txt
 ```
 
+Пакеты для оффлайн-исследования (`app/research`) держатся отдельно — боевой
+контур их не импортирует:
+
+```bash
+pip install -r requirements-research.txt
+```
+
+### Миграции БД
+
+Схема заводится вручную в Supabase; инкрементальные правки лежат в `migrations/`
+и применяются через SQL Editor или `supabase db execute --file <файл>`.
+
 ---
 
 ## Настройка окружения
 
-Создайте файл `.env` в корне проекта:
+Скопируйте `.env.example` в `.env` и подставьте значения:
+
+```bash
+cp .env.example .env
+```
 
 ```env
 # NewsAPI
 NEWS_API=your_newsapi_key
 
-# Supabase
-NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
-NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=your-anon-key
+# Supabase — ключ СЕКРЕТНЫЙ, живёт только на сервере.
+# Все таблицы закрыты RLS-политикой "Deny all for anon", поэтому
+# publishable/anon-ключ здесь не работает: SELECT'ы вернут пустой список,
+# а UPDATE'ы молча не изменят ни одной строки.
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_SECRET_KEY=your_secret_key
 SUPABASE_TABLE=news_alerts
 
 # Google Gemini
@@ -288,16 +312,18 @@ Telegram-уведомление отправляется только если:
 
 ## Требования
 
-- Python 3.11+
+- Python 3.11+ (проверено на 3.14)
 - Зависимости из `requirements.txt`:
   - `fastapi`, `uvicorn`
-  - `httpx`
+  - `supabase` — весь `app/storage` работает через него
+  - `httpx` — БКС, Telegram, RSS и скрейпинг статей
   - `pydantic`
   - `apscheduler`
   - `google-genai`
   - `beautifulsoup4`
   - `tenacity`
   - `pytz`
+  - `websockets`
 
 ---
 
@@ -306,7 +332,10 @@ Telegram-уведомление отправляется только если:
 - API-ключи и токены загружаются исключительно из переменных окружения.
 - `.env` исключён из git.
 - Секреты не логируются.
-- Запросы к Supabase идут через PostgREST с параметризованными фильтрами.
+- Запросы к Supabase идут через официальный клиент `supabase-py` — фильтры
+  параметризованы, строковая сборка URL исключена.
+- Все таблицы под RLS с политикой «Deny all for anon»: публичного доступа к
+  торговому состоянию нет. Бот ходит секретным серверным ключом.
 
 ---
 
