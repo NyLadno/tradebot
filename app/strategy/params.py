@@ -43,7 +43,7 @@ FALLBACK_PARAMS: Dict[str, Any] = {
     "spread_window": 2500,
     "entry_zscore": 2.5,
     "exit_zscore": 0.0,
-    "stop_zscore": 4.5,
+    "stop_zscore": 5.0,
     "max_hold_days": 15,
     "min_hold_min": 120,
     "overnight_pct": 0.0001,
